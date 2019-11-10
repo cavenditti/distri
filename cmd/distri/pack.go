@@ -86,7 +86,7 @@ func pack(args []string) error {
 		"TODO")
 	fset.StringVar(&p.repo, "repo", env.DefaultRepoRoot, "TODO")
 	fset.StringVar(&p.extraBase, "base", "", "if non-empty, an additional base image to install")
-	fset.StringVar(&p.diskImg, "diskimg", "", "Write an ext4 file system image to the specified path")
+	fset.StringVar(&p.diskImg, "diskimg", "", "Write a btrfs file system image to the specified path")
 	fset.StringVar(&p.gcsDiskImg, "gcsdiskimg", "", "Write a Google Cloud file system image (tar.gz containing disk.raw) to the specified path")
 	fset.BoolVar(&p.encrypt, "encrypt", false, "Whether to encrypt the image’s partitions (with LUKS)")
 	fset.BoolVar(&p.serialOnly, "serialonly", false, "Whether to print output only on console=ttyS0,115200 (defaults to false, i.e. console=tty1)")
@@ -720,7 +720,7 @@ name=root`)
 		root = "/dev/mapper/cryptroot"
 	}
 
-	mkfs = exec.Command("sudo", "mkfs.ext4", root)
+	mkfs = exec.Command("sudo", "mkfs.btrfs", root)
 	mkfs.Stdout = os.Stdout
 	mkfs.Stderr = os.Stderr
 	if err := mkfs.Run(); err != nil {
@@ -731,7 +731,7 @@ name=root`)
 		dest, src, fs string
 		extraflags    uintptr
 	}{
-		{"/mnt", root, "ext4", 0},
+		{"/mnt", root, "btrfs", 0},
 		{"/mnt/boot", boot, "ext2", 0},
 		{"/mnt/boot/efi", esp, "vfat", 0},
 		{"/mnt/dev", "/dev", "", syscall.MS_BIND},
@@ -749,6 +749,16 @@ name=root`)
 	if err := p.pack("/mnt"); err != nil {
 		return err
 	}
+
+	//remove and recreate /mnt/proc to allow mounting real /proc
+	os.RemoveAll("/mnt/proc")
+	if err := os.MkdirAll("/mnt/proc", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount("/proc", "/mnt/proc", "", syscall.MS_MGC_VAL|syscall.MS_BIND, ""); err != nil {
+		return xerrors.Errorf("mount %s %s: %v", "/proc", "/mnt/proc", err)
+	}
+	defer syscall.Unmount("/mnt/proc", 0)
 
 	chown := exec.Command("sudo", "chown", os.Getenv("USER"), "/mnt/ro")
 	chown.Stderr = os.Stderr
@@ -774,7 +784,7 @@ name=root`)
 	}
 
 	{
-		fstab := "/dev/mapper/cryptroot / ext4 defaults,x-systemd.device-timeout=0 1 1\n"
+		fstab := "/dev/mapper/cryptroot / btrfs defaults,x-systemd.device-timeout=0 1 1\n"
 		bootUUID, err := uuid(boot, "part")
 		if err != nil {
 			return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
@@ -804,7 +814,7 @@ name=root`)
 	if err := ioutil.WriteFile("/mnt/etc/dracut.conf.d/kbddir.conf", []byte("kbddir=/ro/share\n"), 0644); err != nil {
 		return err
 	}
-	dracut := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", "dracut /boot/initramfs-5.1.9-9.img 5.1.9")
+	dracut := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", "dracut --add-drivers btrfs /boot/initramfs-5.1.9-9.img 5.1.9")
 	dracut.Stderr = os.Stderr
 	dracut.Stdout = os.Stdout
 	if err := dracut.Run(); err != nil {
@@ -862,7 +872,7 @@ name=root`)
 		return xerrors.Errorf("%v: %v", chown.Args, err)
 	}
 
-	for _, m := range []string{"sys", "dev", "boot/efi", "boot", ""} {
+	for _, m := range []string{"sys", "dev", "proc", "boot/efi", "boot", ""} {
 		if err := syscall.Unmount(filepath.Join("/mnt", m), 0); err != nil {
 			return xerrors.Errorf("unmount /mnt/%s: %v", m, err)
 		}
