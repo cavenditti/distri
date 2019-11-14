@@ -1,0 +1,8 @@
+source: "http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz"
+hash: "c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072"
+version: "1.44.4-3-libs"
+
+cbuilder: <
+  copy_to_builddir: true
+>
+

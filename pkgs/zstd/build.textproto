@@ -1,0 +1,29 @@
+source: "https://github.com/facebook/zstd/releases/download/v1.4.3/zstd-1.4.3.tar.gz"
+hash: "e88ec8d420ff228610b77fba4fbf22b9f8b9d3f223a40ef59c9c075fcdad5767"
+version: "1.4.3"
+
+mesonbuilder: <
+>
+
+build_step: <
+  argv: "meson"
+  argv: "setup"
+  argv: "--buildtype=release"
+  argv: "--prefix=${DISTRI_PREFIX}"
+  argv: "-Dbin_programs=true"
+  argv: "-Dbin_contrib=true"
+  argv: "${DISTRI_BUILDDIR}"
+  argv: "${DISTRI_SOURCEDIR}/build/meson"
+>
+
+build_step: <
+  argv: "ninja"
+  argv: "-C"
+  argv: "${DISTRI_BUILDDIR}"
+>
+
+build_step: <
+  argv: "/bin/sh"
+  argv: "-c"
+  argv: "PREFIX=${DISTRI_PREFFIX} DESTDIR=${DISTRI_DESTDIR} ninja install"
+>

@@ -1,0 +1,47 @@
+source: "https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git/snapshot/btrfs-progs-5.2.2.tar.gz"
+hash: "5c6fb2821deb4ec2c85b447d4b33a7646454957dbf533742ead74ed4fa46b7aa"
+version: "5.2.2-1"
+
+cbuilder: <
+   #copy_to_builddir: true
+   #autoreconf: true
+>
+
+# build dependencies:
+dep: "autoconf"
+dep: "automake"
+dep: "docbook2x"
+dep: "docbook-xsl"
+dep: "xmlto"
+dep: "asciidoc"
+dep: "e2fsprogs"
+dep: "zstd"
+dep: "zlib"
+dep: "lzo2"
+
+build_step: <
+  argv: "/bin/sh"
+  argv: "-c"
+  argv: "${DISTRI_SOURCEDIR}/autogen.sh"
+>
+
+build_step: <
+  argv: "/bin/sh"
+  argv: "-c"
+  #argv: "e2fs_CFLAGS=\ro/${DISTRI_RESOLVE:e2fsprogs}/lib ${DISTRI_SOURCEDIR}/configure"
+  argv: "cd ${DISTRI_SOURCEDIR} && ./configure --prefix=${DISTRI_PREFFIX} --disable-documentation"
+>
+
+build_step: <
+  argv: "/bin/sh"
+  argv: "-c"
+  argv: "XML_CATALOG_FILES=/ro/${DISTRI_RESOLVE:docbook-xml}/out/etc/xml make -C ${DISTRI_SOURCEDIR}"
+>
+
+build_step: <
+  argv: "/bin/sh"
+  argv: "-c"
+  #argv: "cd ${DISTRI_SOURCEDIR} && make DESTDIR=${DISTRI_DESTDIR}/ro/${DISTRI_FULLNAME} PREFIX=${DISTRI_PREFFIX} install"
+  argv: "cd ${DISTRI_SOURCEDIR} && make DESTDIR=${DISTRI_DESTDIR}/ro/${DISTRI_FULLNAME} install"
+>
+

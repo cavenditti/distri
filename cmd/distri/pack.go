@@ -720,6 +720,7 @@ name=root`)
 		root = "/dev/mapper/cryptroot"
 	}
 
+	//make root partition
 	mkfs = exec.Command("sudo", "mkfs.btrfs", root)
 	mkfs.Stdout = os.Stdout
 	mkfs.Stderr = os.Stderr
@@ -727,15 +728,51 @@ name=root`)
 		return xerrors.Errorf("%v: %v", mkfs.Args, err)
 	}
 
+	//mount root and create default subvolumes
+	if err := os.MkdirAll("/mnt", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount(root, "/mnt", "btrfs", syscall.MS_MGC_VAL|0, ""); err != nil {
+		return xerrors.Errorf("mount %s %s: %v", root, "/mnt", err)
+	}
+	for _, entry := range []struct {
+		path          string
+		defaultSubvol bool
+	}{
+		{"sysroot", true},
+		{"rootfs", false},
+		{"home", false},
+	} {
+		subvol := exec.Command("sudo", "btrfs", "subvolume", "create", filepath.Join("/mnt", entry.path))
+		subvol.Stdout = os.Stdout
+		subvol.Stderr = os.Stderr
+		if err := subvol.Run(); err != nil {
+			return xerrors.Errorf("Subvolume create %v: %v", subvol.Args, err)
+		}
+		if entry.defaultSubvol {
+			subvol := exec.Command("sudo", "btrfs", "subvolume", "set-default", filepath.Join("/mnt", entry.path))
+			subvol.Stdout = os.Stdout
+			subvol.Stderr = os.Stderr
+			if err := subvol.Run(); err != nil {
+				return xerrors.Errorf("Subvolume create %v: %v", subvol.Args, err)
+			}
+		}
+	}
+	if err := syscall.Unmount("/mnt", 0); err != nil {
+		return xerrors.Errorf("unmount %s: %v", "/mnt", err)
+	}
+
+	//mounts
 	for _, entry := range []struct {
 		dest, src, fs string
 		extraflags    uintptr
+		options       string
 	}{
-		{"/mnt", root, "btrfs", 0},
-		{"/mnt/boot", boot, "ext2", 0},
-		{"/mnt/boot/efi", esp, "vfat", 0},
-		{"/mnt/dev", "/dev", "", syscall.MS_BIND},
-		{"/mnt/sys", "/sys", "", syscall.MS_BIND},
+		{"/mnt", root, "btrfs", 0, "subvol=/sysroot"},
+		{"/mnt/boot", boot, "ext2", 0, ""},
+		{"/mnt/boot/efi", esp, "vfat", 0, ""},
+		{"/mnt/dev", "/dev", "", syscall.MS_BIND, ""},
+		{"/mnt/sys", "/sys", "", syscall.MS_BIND, ""},
 	} {
 		if err := os.MkdirAll(entry.dest, 0755); err != nil {
 			return err
@@ -783,11 +820,22 @@ name=root`)
 		}
 	}
 
+	//get root and boot uuid
+	rootUUID, err := uuid(root, "part")
+	if err != nil {
+		return xerrors.Errorf(`uuid(root=%v, "part"): %v`, root, err)
+	}
+	bootUUID, err := uuid(boot, "part")
+	if err != nil {
+		return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
+	}
+
 	{
-		fstab := "/dev/mapper/cryptroot / btrfs defaults,x-systemd.device-timeout=0 1 1\n"
-		bootUUID, err := uuid(boot, "part")
-		if err != nil {
-			return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
+		fstab := ""
+		if p.encrypt {
+			fstab = "/dev/mapper/cryptroot / btrfs defaults,x-systemd.device-timeout=0 1 1\n"
+		} else {
+			fstab = "PARTUUID=" + rootUUID + " / btrfs defaults 0 1\n"
 		}
 		fstab = fstab + "PARTUUID=" + bootUUID + " /boot ext2 defaults 1 2\n"
 		espUUID, err := uuid(esp, "part")
@@ -822,6 +870,7 @@ name=root`)
 	}
 
 	var params []string
+	params = append(params, "root=PARTUUID="+rootUUID)
 	if !p.serialOnly {
 		params = append(params, "console=tty1")
 	}
@@ -831,7 +880,8 @@ name=root`)
 	if p.bootDebug {
 		params = append(params, "systemd.log_level=debug systemd.log_target=console")
 	}
-	mkconfigCmd := "GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
+	//disable os prober, to avoid needing to mount /proc on some systems
+	mkconfigCmd := "GRUB_DISABLE_LINUX_UUID=true GRUB_DISABLE_LINUX_PARTUUID=true GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
 	mkconfig := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", mkconfigCmd)
 	mkconfig.Stderr = os.Stderr
 	mkconfig.Stdout = os.Stdout

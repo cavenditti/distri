@@ -1,0 +1,27 @@
+source: "https://github.com/cavenditti/overlayroot/archive/v0.1.4.tar.gz"
+hash: "abf1c27c604860c2a14c7dd4f8bde7850751f5c266232d19541c85116f2c749b"
+version: "0.1.4-1"
+
+cbuilder: <>
+
+# build dependencies:
+runtime_dep: "bash"
+
+# Not clear. Should be changed the Makefile.
+
+build_step: <
+  argv: "make"
+  argv: "-C"
+  argv: "${DISTRI_SOURCEDIR}"
+  argv: "BUILDROOT=${DISTRI_DESTDIR}"
+  argv: "DESTDIR=${DISTRI_PREFIX}/lib"
+  argv: "install"
+>
+
+install: <
+  file: <
+    srcpath: "bin/overlayroot-chroot"
+    destpath: "bin/overlayroot-chroot"
+  >
+>
+
