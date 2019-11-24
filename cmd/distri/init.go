@@ -5,8 +5,34 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
+
+func parseCmdline(arg []string) (map[string]string, error) {
+	bcmd, err := ioutil.ReadFile("/proc/cmdline")
+	if err != nil {
+		return nil, err
+	}
+
+	cmdlineString := string(bcmd[:])
+	cmdline := strings.Split(cmdlineString, " ")
+
+	var m map[string]string
+	m = make(map[string]string)
+
+	for _, param := range cmdline {
+		//fmt.Printf("%d\t> %s\n", i, param)
+		for _, k := range arg {
+			if strings.HasPrefix(param, k) {
+				param = strings.Replace(param, k, "", 1)
+				m[k] = strings.Replace(param, "=", "", 1)
+				//fmt.Println("Found " + k + " - value: " + m[k])
+			}
+		}
+	}
+	return m, err
+}
 
 func bootfuse() error {
 	// TODO: start fuse in separate process, make argv[0] be '@' as per
@@ -46,8 +72,25 @@ func bootfuse() error {
 }
 
 func pid1() error {
-	log.Printf("FUSE-mounting package store /roimg on /ro")
+	log.Printf("Reading snapshot from cmdine")
+	params := []string{"snapshot", "root=UUID"}
+	m, err := parseCmdline(params)
+	if err != nil {
+		return err
+	}
 
+	if _, ok := m["snapshot"]; ok {
+		log.Printf("system snapshot: " + m["snapshot"])
+	} else {
+		log.Printf("No snapshot defined, using default.")
+	}
+
+	//mount /roimg
+	log.Printf("Mounting /etc and /roimg")
+	syscall.Mount("/dev/sda4", "/etc", "btrfs", syscall.MS_MGC_VAL, "subvol=/etc"+m["snapshot"])
+	syscall.Mount("/dev/sda4", "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/roimg"+m["snapshot"])
+
+	log.Printf("FUSE-mounting package store /roimg on /ro")
 	if err := bootfuse(); err != nil {
 		return err
 	}

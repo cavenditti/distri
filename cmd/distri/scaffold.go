@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -133,7 +134,13 @@ func (c *scaffoldctx) scaffold1() error {
 	if err := os.MkdirAll(pkgdir, 0755); err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(filepath.Join(pkgdir, "build.textproto"), buf.Bytes(), 0644); err != nil {
+	filename := filepath.Join(pkgdir, "build.textproto")
+	// preserve old build.textproto, if exists
+	if _, err := os.Stat(filename); err == nil {
+		os.Rename(filename, filename+".old")
+		log.Printf("Old build.textproto saved as build.textproto.old")
+	}
+	if err := ioutil.WriteFile(filename, buf.Bytes(), 0644); err != nil {
 		return err
 	}
 	return nil

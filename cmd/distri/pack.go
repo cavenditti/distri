@@ -86,7 +86,7 @@ func pack(args []string) error {
 		"TODO")
 	fset.StringVar(&p.repo, "repo", env.DefaultRepoRoot, "TODO")
 	fset.StringVar(&p.extraBase, "base", "", "if non-empty, an additional base image to install")
-	fset.StringVar(&p.diskImg, "diskimg", "", "Write an ext4 file system image to the specified path")
+	fset.StringVar(&p.diskImg, "diskimg", "", "Write a btrfs file system image to the specified path")
 	fset.StringVar(&p.gcsDiskImg, "gcsdiskimg", "", "Write a Google Cloud file system image (tar.gz containing disk.raw) to the specified path")
 	fset.BoolVar(&p.encrypt, "encrypt", false, "Whether to encrypt the image’s partitions (with LUKS)")
 	fset.BoolVar(&p.serialOnly, "serialonly", false, "Whether to print output only on console=ttyS0,115200 (defaults to false, i.e. console=tty1)")
@@ -720,27 +720,70 @@ name=root`)
 		root = "/dev/mapper/cryptroot"
 	}
 
-	mkfs = exec.Command("sudo", "mkfs.ext4", root)
+	//make root partition
+	mkfs = exec.Command("sudo", "mkfs.btrfs", root)
 	mkfs.Stdout = os.Stdout
 	mkfs.Stderr = os.Stderr
 	if err := mkfs.Run(); err != nil {
 		return xerrors.Errorf("%v: %v", mkfs.Args, err)
 	}
 
+	//mount root and create default subvolumes
+	if err := os.MkdirAll("/mnt", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount(root, "/mnt", "btrfs", syscall.MS_MGC_VAL|0, ""); err != nil {
+		return xerrors.Errorf("mount %s %s: %v", root, "/mnt", err)
+	}
+	for _, entry := range []struct {
+		path          string
+		defaultSubvol bool
+	}{
+		{"sysroot", true},
+		{"etc", false},
+		{"var", false},
+		{"roimg", false},
+		{"home", false},
+	} {
+		subvol := exec.Command("sudo", "btrfs", "subvolume", "create", filepath.Join("/mnt", entry.path))
+		subvol.Stdout = os.Stdout
+		subvol.Stderr = os.Stderr
+		if err := subvol.Run(); err != nil {
+			return xerrors.Errorf("Subvolume create %v: %v", subvol.Args, err)
+		}
+		if entry.defaultSubvol {
+			subvol := exec.Command("sudo", "btrfs", "subvolume", "set-default", filepath.Join("/mnt", entry.path))
+			subvol.Stdout = os.Stdout
+			subvol.Stderr = os.Stderr
+			if err := subvol.Run(); err != nil {
+				return xerrors.Errorf("Subvolume create %v: %v", subvol.Args, err)
+			}
+		}
+	}
+	if err := syscall.Unmount("/mnt", 0); err != nil {
+		return xerrors.Errorf("unmount %s: %v", "/mnt", err)
+	}
+
+	//mounts
 	for _, entry := range []struct {
 		dest, src, fs string
 		extraflags    uintptr
+		options       string
 	}{
-		{"/mnt", root, "ext4", 0},
-		{"/mnt/boot", boot, "ext2", 0},
-		{"/mnt/boot/efi", esp, "vfat", 0},
-		{"/mnt/dev", "/dev", "", syscall.MS_BIND},
-		{"/mnt/sys", "/sys", "", syscall.MS_BIND},
+		{"/mnt", root, "btrfs", 0, "subvol=/sysroot"},
+		//{"/mnt/etc", root, "btrfs", 0, "subvol=/etc"},
+		{"/mnt/var", root, "btrfs", 0, "subvol=/var"},
+		{"/mnt/home", root, "btrfs", 0, "subvol=/home"},
+		{"/mnt/roimg", root, "btrfs", 0, "subvol=/roimg"},
+		{"/mnt/boot", boot, "ext2", 0, ""},
+		{"/mnt/boot/efi", esp, "vfat", 0, ""},
+		{"/mnt/dev", "/dev", "", syscall.MS_BIND, ""},
+		{"/mnt/sys", "/sys", "", syscall.MS_BIND, ""},
 	} {
 		if err := os.MkdirAll(entry.dest, 0755); err != nil {
 			return err
 		}
-		if err := syscall.Mount(entry.src, entry.dest, entry.fs, syscall.MS_MGC_VAL|entry.extraflags, ""); err != nil {
+		if err := syscall.Mount(entry.src, entry.dest, entry.fs, syscall.MS_MGC_VAL|entry.extraflags, entry.options); err != nil {
 			return xerrors.Errorf("mount %s %s: %v", entry.src, entry.dest, err)
 		}
 		defer syscall.Unmount(entry.dest, 0)
@@ -749,6 +792,23 @@ name=root`)
 	if err := p.pack("/mnt"); err != nil {
 		return err
 	}
+
+	ls := exec.Command("sudo", "ls", "/mnt/proc")
+	ls.Stderr = os.Stderr
+	ls.Stdout = os.Stdout
+	if err := ls.Run(); err != nil {
+		return xerrors.Errorf("%v: %v", ls.Args, err)
+	}
+
+	//remove and recreate /mnt/proc to allow mounting real /proc
+	os.RemoveAll("/mnt/proc")
+	if err := os.MkdirAll("/mnt/proc", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount("/proc", "/mnt/proc", "", syscall.MS_MGC_VAL|syscall.MS_BIND, ""); err != nil {
+		return xerrors.Errorf("mount %s %s: %v", "/proc", "/mnt/proc", err)
+	}
+	defer syscall.Unmount("/mnt/proc", 0)
 
 	chown := exec.Command("sudo", "chown", os.Getenv("USER"), "/mnt/ro")
 	chown.Stderr = os.Stderr
@@ -773,11 +833,22 @@ name=root`)
 		}
 	}
 
+	//get root and boot uuid
+	rootUUID, err := uuid(root, "part")
+	if err != nil {
+		return xerrors.Errorf(`uuid(root=%v, "part"): %v`, root, err)
+	}
+	bootUUID, err := uuid(boot, "part")
+	if err != nil {
+		return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
+	}
+
 	{
-		fstab := "/dev/mapper/cryptroot / ext4 defaults,x-systemd.device-timeout=0 1 1\n"
-		bootUUID, err := uuid(boot, "part")
-		if err != nil {
-			return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
+		fstab := ""
+		if p.encrypt {
+			fstab = "/dev/mapper/cryptroot / btrfs defaults,x-systemd.device-timeout=0 1 1\n"
+		} else {
+			fstab = "PARTUUID=" + rootUUID + " / btrfs defaults 0 1\n"
 		}
 		fstab = fstab + "PARTUUID=" + bootUUID + " /boot ext2 defaults 1 2\n"
 		espUUID, err := uuid(esp, "part")
@@ -804,7 +875,7 @@ name=root`)
 	if err := ioutil.WriteFile("/mnt/etc/dracut.conf.d/kbddir.conf", []byte("kbddir=/ro/share\n"), 0644); err != nil {
 		return err
 	}
-	dracut := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", "dracut /boot/initramfs-5.1.9-9.img 5.1.9")
+	dracut := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", "dracut --add-drivers btrfs /boot/initramfs-5.1.9-9.img 5.1.9")
 	dracut.Stderr = os.Stderr
 	dracut.Stdout = os.Stdout
 	if err := dracut.Run(); err != nil {
@@ -812,6 +883,7 @@ name=root`)
 	}
 
 	var params []string
+	params = append(params, "root=PARTUUID="+rootUUID)
 	if !p.serialOnly {
 		params = append(params, "console=tty1")
 	}
@@ -821,7 +893,8 @@ name=root`)
 	if p.bootDebug {
 		params = append(params, "systemd.log_level=debug systemd.log_target=console")
 	}
-	mkconfigCmd := "GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
+
+	mkconfigCmd := "GRUB_DISABLE_LINUX_UUID=true GRUB_DISABLE_LINUX_PARTUUID=true GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
 	mkconfig := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", mkconfigCmd)
 	mkconfig.Stderr = os.Stderr
 	mkconfig.Stdout = os.Stdout
@@ -862,10 +935,37 @@ name=root`)
 		return xerrors.Errorf("%v: %v", chown.Args, err)
 	}
 
-	for _, m := range []string{"sys", "dev", "boot/efi", "boot", ""} {
-		if err := syscall.Unmount(filepath.Join("/mnt", m), 0); err != nil {
-			return xerrors.Errorf("unmount /mnt/%s: %v", m, err)
-		}
+	//copy /etc to /etx subvolume (previously not mounted)
+	if err := os.MkdirAll("/mnt/etcb", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount(root, "/mnt/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etc"); err != nil {
+		return xerrors.Errorf("mount %s %s: %v", root, "/mnt/etcb", err)
+	}
+	cp := exec.Command("sudo", "sh", "-c", "mv /mnt/etc/* /mnt/etcb/")
+	cp.Stderr = os.Stderr
+	cp.Stdout = os.Stdout
+	if err := cp.Run(); err != nil {
+		return xerrors.Errorf("%v: %v", cp.Args, err)
+	}
+	cp = exec.Command("sudo", "sh", "-c", "mv /mnt/etc/.pwd.lock /mnt/etcb/")
+	cp.Stderr = os.Stderr
+	cp.Stdout = os.Stdout
+	if err := cp.Run(); err != nil {
+		return xerrors.Errorf("%v: %v", cp.Args, err)
+	}
+
+	// for _, m := range []string{"sys", "dev", "proc", "boot/efi", "boot", "var", "etc", "roimg", ""} {
+	// 	if err := syscall.Unmount(filepath.Join("/mnt", m), 0); err != nil {
+	// 		return xerrors.Errorf("unmount /mnt/%s: %v", m, err)
+	// 	}
+	// }
+	//unmount /mnt and everything mounted below
+	unmount := exec.Command("sudo", "umount", "-R", "/mnt")
+	unmount.Stderr = os.Stderr
+	unmount.Stdout = os.Stdout
+	if err := unmount.Run(); err != nil {
+		return xerrors.Errorf("%v: %v", unmount.Args, err)
 	}
 
 	losetup = exec.Command("sudo", "losetup", "-d", base)

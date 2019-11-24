@@ -26,6 +26,7 @@ runtime_dep: "dracut"
 runtime_dep: "linux"
 runtime_dep: "linux-firmware"
 runtime_dep: "cryptsetup" # for pack -encrypt
+runtime_dep: "btrfs-progs" # if using btrfs as root
 
 # TODO: remove once pack no longer unconditionally enables units:
 runtime_dep: "containerd"

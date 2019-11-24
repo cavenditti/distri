@@ -225,6 +225,7 @@ func install1(ctx context.Context, root string, repo distri.Repo, pkg string, fi
 
 	// first is true only on the first installation of the package (regardless
 	// of its version).
+
 	if first {
 		readerAt, err := mmap.Open(filepath.Join(tmpDir, pkg+".squashfs"))
 		if err != nil {
