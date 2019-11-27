@@ -47,6 +47,7 @@ Example:
 // out/lib/systemd/system directories.
 var ExchangeDirs = []string{
 	"/bin",
+	"/etc",
 	"/out/lib",
 	"/out/lib64",
 	"/out/lib/gio",

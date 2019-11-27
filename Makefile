@@ -66,6 +66,20 @@ install:
 test: install
 	DISTRIROOT=$$PWD go test -v ./cmd/... ./integration/...
 
+distri1: install
+	cd pkgs/distri1 && distri
+
+base: distri1
+	cd pkgs/base && distri
+	cd pkgs/base-full && distri
+	cd pkgs/base-x11 && distri
+
+clear:
+	rm -R build/base*
+	rm -R build/distri1
+	rm -R build/distri/pkg/base*
+	rm -R build/distri/pkg/distri1*
+
 image:
 	DISTRIROOT=$$PWD ${IMAGE}
 

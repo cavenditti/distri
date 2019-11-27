@@ -398,7 +398,7 @@ func install1(ctx context.Context, root string, repo distri.Repo, pkg string, fi
 	return nil
 }
 
-func installTransitively1(root string, repos []distri.Repo, pkg string) error {
+func installTransitively1(root string, repos []distri.Repo, pkg string, copyEtc bool) error {
 	origpkg := pkg
 	if _, ok := distri.HasArchSuffix(pkg); !ok && !distri.LikelyFullySpecified(pkg) {
 		pkg += "-amd64" // TODO: configurable / auto-detect
@@ -443,10 +443,6 @@ func installTransitively1(root string, repos []distri.Repo, pkg string) error {
 	pkgs := append([]string{pkg}, pm.GetRuntimeDep()...)
 	log.Printf("resolved %s to %v", origpkg, pkgs)
 
-	// TODO: figure out if this is the first installation by checking existence
-	// in the corresponding pkgset file
-	first := true
-
 	// download all packages with maximum concurrency for the time being
 	var eg errgroup.Group
 	for _, pkg := range pkgs {
@@ -455,7 +451,7 @@ func installTransitively1(root string, repos []distri.Repo, pkg string) error {
 			var err error
 			labels := pprof.Labels("package", pkg)
 			pprof.Do(context.Background(), labels, func(ctx context.Context) {
-				err = install1(ctx, root, repo, pkg, first)
+				err = install1(ctx, root, repo, pkg, copyEtc)
 			})
 			if err != nil {
 				return fmt.Errorf("installing %s: %v", pkg, err)
@@ -484,6 +480,8 @@ func install(args []string) error {
 		repo = fset.String("repo", "", "repository from which to install packages from. path (default TODO) or HTTP URL (e.g. TODO)")
 
 		update = fset.Bool("update", false, "internal flag set by distri update, do not use")
+
+		copyEtc = fset.Bool("copy-etc", false, "copy config files to /etc")
 
 		//pkg = fset.String("pkg", "", "path to .squashfs package to mount")
 	)
@@ -531,7 +529,7 @@ func install(args []string) error {
 	for _, pkg := range fset.Args() {
 		pkg := pkg // copy
 		eg.Go(func() error {
-			err := installTransitively1(*root, repos, pkg)
+			err := installTransitively1(*root, repos, pkg, *copyEtc)
 			if _, ok := err.(*errPackageNotFound); ok && *update {
 				return nil // ignore package not found
 			}

@@ -34,6 +34,12 @@ func parseCmdline(arg []string) (map[string]string, error) {
 	return m, err
 }
 
+func createEtcOverlay() error {
+	syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc,upperdir=/run/etc/u,work=/run/etc/w")
+
+	return nil
+}
+
 func bootfuse() error {
 	// TODO: start fuse in separate process, make argv[0] be '@' as per
 	// https://www.freedesktop.org/wiki/Software/systemd/RootStorageDaemons/
@@ -72,7 +78,9 @@ func bootfuse() error {
 }
 
 func pid1() error {
-	log.Printf("Reading snapshot from cmdine")
+	log.SetPrefix("[distrib]")
+
+	//read snapshot from kernel cmdline
 	params := []string{"snapshot", "root=UUID"}
 	m, err := parseCmdline(params)
 	if err != nil {
@@ -80,26 +88,41 @@ func pid1() error {
 	}
 
 	if _, ok := m["snapshot"]; ok {
-		log.Printf("system snapshot: " + m["snapshot"])
+		log.Printf("System snapshot: " + m["snapshot"])
 	} else {
 		log.Printf("No snapshot defined, using default.")
 	}
 
-	//mount /roimg
-	log.Printf("Mounting /etc and /roimg")
-	syscall.Mount("/dev/sda4", "/etc", "btrfs", syscall.MS_MGC_VAL, "subvol=/etc"+m["snapshot"])
+	// mount /roimg
+	log.Printf("mounting /roimg snapshot")
 	syscall.Mount("/dev/sda4", "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/roimg"+m["snapshot"])
 
+	// mount packages
 	log.Printf("FUSE-mounting package store /roimg on /ro")
 	if err := bootfuse(); err != nil {
 		return err
 	}
 
-	log.Printf("starting systemd")
+	// mount /etc
+	log.Printf("mounting /etc snapshot and overlay")
+	if err := os.MkdirAll("/run/etcb", 0755); err != nil {
+		return err
+	}
+	syscall.Mount("/dev/sda4", "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etcb"+m["snapshot"])
+	if err := os.MkdirAll("/run/etcb/.workdir", 0700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll("/etc", 0755); err != nil {
+		return err
+	}
+	if err := syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc,upperdir=/run/etcb/etc,workdir=/run/etcb/.workdir"); err != nil {
+		return err
+	}
 
+	// start systemd
+	log.Printf("starting systemd")
 	// TODO: readdir /ro (does not mount any images)
 	// TODO: keep most recent systemd entry
-
 	const systemd = "/ro/systemd-amd64-239-10/out/lib/systemd/systemd" // TODO(later): glob?
 	return syscall.Exec(systemd, []string{systemd}, nil)
 }
