@@ -22,12 +22,10 @@ func parseCmdline(arg []string) (map[string]string, error) {
 	m = make(map[string]string)
 
 	for _, param := range cmdline {
-		//fmt.Printf("%d\t> %s\n", i, param)
 		for _, k := range arg {
 			if strings.HasPrefix(param, k) {
 				param = strings.Replace(param, k, "", 1)
 				m[k] = strings.Replace(param, "=", "", 1)
-				//fmt.Println("Found " + k + " - value: " + m[k])
 			}
 		}
 	}
@@ -78,24 +76,22 @@ func bootfuse() error {
 }
 
 func pid1() error {
-	log.SetPrefix("[distrib]")
+	log.SetPrefix("distrib -> ")
 
-	//read snapshot from kernel cmdline
-	params := []string{"snapshot", "root=UUID"}
-	m, err := parseCmdline(params)
+	config, err := getSystemconfig()
 	if err != nil {
 		return err
 	}
 
-	if _, ok := m["snapshot"]; ok {
-		log.Printf("System snapshot: " + m["snapshot"])
-	} else {
-		log.Printf("No snapshot defined, using default.")
-	}
-
 	// mount /roimg
 	log.Printf("mounting /roimg snapshot")
-	syscall.Mount("/dev/sda4", "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/roimg"+m["snapshot"])
+	if err := syscall.Mount(config.rootDev, "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots/"+config.snapshot+"/roimg"); err != nil {
+		// if failed, try mounting /roimg which subvolume should always exists
+		log.Printf("!! failed mounting subvolume: /snapshots/" + config.snapshot + "/roimg !!\ttrying /roimg instead")
+		if err := syscall.Mount(config.rootDev, "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/roimg"); err != nil {
+			return err
+		}
+	}
 
 	// mount packages
 	log.Printf("FUSE-mounting package store /roimg on /ro")
@@ -108,7 +104,13 @@ func pid1() error {
 	if err := os.MkdirAll("/run/etcb", 0755); err != nil {
 		return err
 	}
-	syscall.Mount("/dev/sda4", "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etcb"+m["snapshot"])
+	if err := syscall.Mount(config.rootDev, "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots/"+config.snapshot+"/etcb"); err != nil {
+		// if failed, try mounting /etcb subvolume which should always exists
+		log.Printf("!! failed mounting subvolume: /snapshots/" + config.snapshot + "/etcb !!\ttrying /etcb instead")
+		if err := syscall.Mount(config.rootDev, "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etcb"); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll("/run/etcb/.workdir", 0700); err != nil {
 		return err
 	}

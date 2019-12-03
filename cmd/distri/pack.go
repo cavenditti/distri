@@ -944,16 +944,12 @@ name=root`)
 	// create /etcb subvolume and move /etc contents to it
 	log.Printf("Fixing /etc")
 
-	os.MkdirAll("/mnt/tmp/btrfsroot", 0755)
+	os.MkdirAll("/mnt/tmp/btrfsroot", 0700)
 	if err := syscall.Mount(root, "/mnt/tmp/btrfsroot", "btrfs", syscall.MS_MGC_VAL, "subvol=/"); err != nil {
 		return err
 	}
-	if err := createSubvolume("/mnt/tmp/btrfsroot/etcb"); err != nil {
-		return err
-	}
-	if err := syscall.Unmount("/mnt/tmp/btrfsroot", 0); err != nil {
-		return err
-	}
+	createSubvolume("/mnt/tmp/btrfsroot/etcb")
+
 	os.MkdirAll("/mnt/etcb", 0755)
 	if err := syscall.Mount(root, "/mnt/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etcb"); err != nil {
 		return xerrors.Errorf("mount %s %s: %v", root, "/mnt/etcb", err)
@@ -965,8 +961,32 @@ name=root`)
 		return err
 	}
 
+	createSubvolume("/mnt/tmp/btrfsroot/snapshots")
+	os.MkdirAll("/mnt/tmp/btrfsroot/snapshots/default", 0700)
+	os.MkdirAll("/mnt/tmp/btrfsroot/snapshots/pristine", 0700)
+
+	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/pristine/etcb", true); err != nil {
+		return xerrors.Errorf("create snaphot: %v", err)
+	}
+	if err := createBtrfsSnapshot("/mnt/roimg", "/mnt/tmp/btrfsroot/snapshots/pristine/roimg", true); err != nil {
+		return xerrors.Errorf("create snaphot: %v", err)
+	}
+	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/default/etcb", false); err != nil {
+		return xerrors.Errorf("create snaphot: %v", err)
+	}
+	if err := createBtrfsSnapshot("/mnt/roimg", "/mnt/tmp/btrfsroot/snapshots/default/roimg", false); err != nil {
+		return xerrors.Errorf("create snaphot: %v", err)
+	}
+
+	if err := syscall.Unmount("/mnt/tmp/btrfsroot", 0); err != nil {
+		return err
+	}
+
+	syscall.Unmount("/mnt/etcb", 0)
+	os.RemoveAll("/mnt/etcb")
+
 	//unmount /mnt and everything mounted below
-	for _, m := range []string{"sys", "dev", "proc", "boot/efi", "boot", "home", "var", "etcb", "roimg"} {
+	for _, m := range []string{"sys", "dev", "proc", "boot/efi", "boot", "home", "var", "roimg"} {
 		if err := syscall.Unmount(filepath.Join("/mnt", m), 0); err != nil {
 			return xerrors.Errorf("unmount /mnt/%s: %v", m, err)
 		}

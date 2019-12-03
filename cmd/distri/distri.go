@@ -95,6 +95,7 @@ func main() {
 		"pack":     {pack},
 		"scaffold": {scaffold},
 		"install":  {install},
+		"snapshot": {snapshot},
 		"fuse": {func(args []string) error {
 			join, err := fuse.Mount(args)
 			if err != nil {
