@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	_ "github.com/distr1/distri/internal/oninterrupt"
@@ -34,9 +36,9 @@ func getSystemconfig() (systemconfig, error) {
 	// get snapshot
 	snapshot, ok := m["snapshot"]
 	if ok {
-		log.Printf("system snapshot: " + snapshot)
+		//log.Printf("curent system snapshot: " + snapshot)
 	} else {
-		log.Printf("no snapshot defined, using default.")
+		//log.Printf("no snapshot defined, using default.")
 		snapshot = "default"
 	}
 
@@ -66,10 +68,21 @@ func createBtrfsSnapshot(subvol, path string, readOnly bool) error {
 	} else {
 		cmd = exec.Command("sudo", "btrfs", "subvolume", "snapshot", subvol, path)
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	//cmd.Stdout = os.Stdout
+	//cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	return err
+}
+
+func getUUID(path string) (string, error) {
+	cmd := exec.Command("findmnt", "-noUUID", path)
+	UUIDb, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	UUID := strings.TrimSpace(string(UUIDb))
+
+	return UUID, nil
 }
 
 func createSnapshot(args []string) error {
@@ -120,7 +133,10 @@ Create a system snapshot.
 
 	if *readOnly {
 
-		for _, s := range []string{"etcb", "roimg"} {
+		if err := createBtrfsSnapshot(filepath.Join(snapshotsroot, config.snapshot, "etcb"), filepath.Join(snapshotsroot, name, "etcb"), true); err != nil {
+			return xerrors.Errorf("create snapshot: %v ", err)
+		}
+		for _, s := range []string{"roimg"} {
 			if err := createBtrfsSnapshot(filepath.Join(snapshotsroot, config.snapshot, s), filepath.Join(snapshotsroot, name, s), true); err != nil {
 				return xerrors.Errorf("create snapshot: %v ", err)
 			}
@@ -136,44 +152,24 @@ Create a system snapshot.
 	}
 
 	//cmd := exec.Command("blkid", "-ovalue", "-sUUID", config.rootDev)
-	cmd := exec.Command("findmnt", "-noUUID", "/")
-	rootUUIDb, err := cmd.Output()
+	rootUUID, err := getUUID("/")
 	if err != nil {
-		return xerrors.Errorf("cannot get root UUID")
+		return xerrors.Errorf("cannot get root UUID", err)
 	}
-	rootUUID := string(rootUUIDb)
-	fmt.Println("using root UUID: " + rootUUID)
+	log.Println("creating snapshot on root UUID: " + rootUUID)
 
-	cmd = exec.Command("findmnt", "-noUUID", "/boot")
-	bootUUIDb, err := cmd.Output()
-	if err != nil {
-		return xerrors.Errorf("cannot get boot UUID")
-	}
-	bootUUID := string(bootUUIDb)
-	fmt.Println("using boot UUID: " + bootUUID)
-
-	f, err := os.OpenFile("/etc/grub.d/40_custom",
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Println(err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(`menuentry 'Snapshot ` + name + ` GNU/Linux, with Linux 5.1.9-9' {
-	load_video
-	insmod gzio
-	insmod part_gpt
-	insmod ext2
-	  search --no-floppy --fs-uuid --set=root  ` + bootUUID + `
-	echo    'Loading Snapshot ` + name + ` 5.1.9-9 ...'
-	linux   /vmlinuz-5.1.9-9 console=ttyS0,115200 ro rootflags=subvol=sysroot  root=UUID=` + rootUUID + ` init=/init snapshot=` + name + ` systemd.setenv=PATH=/bin rw
-	initrd  /initramfs-5.1.9-9.img
-}
-`); err != nil {
-		log.Println(err)
+	if err := ioutil.WriteFile(("/boot/loader/entries/" + name + ".conf"), []byte(`
+title   Snapshot `+name+` with Linux 5.1.9-9
+linux   /vmlinuz-5.1.9-9
+initrd  /initramfs-5.1.9-9.img
+options  console=ttyS0,115200 ro rootflags=subvol=sysroot  root=UUID=`+rootUUID+` init=/init snapshot=`+name+` systemd.setenv=PATH=/bin rw
+`), 0644); err != nil {
+		return err
 	}
 
 	syscall.Unmount(snapshotsroot, 0)
 	os.RemoveAll(snapshotsroot)
+	log.Println("created snapshot \"" + name + "\"")
 
 	return nil
 }
@@ -185,7 +181,7 @@ func listSnapshots(args []string) error {
 	}
 
 	os.MkdirAll(snapshotsroot, 0700)
-	if err := syscall.Mount(config.rootDev, "/tmp/btrfsroot", "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots"); err != nil {
+	if err := syscall.Mount(config.rootDev, snapshotsroot, "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots"); err != nil {
 		return err
 	}
 
@@ -203,7 +199,13 @@ func listSnapshots(args []string) error {
 	}
 	for _, file := range fileInfo {
 		if file.IsDir() {
-			fmt.Println(file.Name())
+			name := file.Name()
+			fmt.Printf(name)
+			if name == config.snapshot {
+				fmt.Printf(" [current]\n")
+			} else {
+				fmt.Printf("\n")
+			}
 		}
 	}
 

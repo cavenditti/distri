@@ -111,6 +111,9 @@ func pid1() error {
 			return err
 		}
 	}
+	if err := os.RemoveAll("/run/etcb/.workdir"); err != nil {
+		return err
+	}
 	if err := os.MkdirAll("/run/etcb/.workdir", 0700); err != nil {
 		return err
 	}
@@ -118,6 +121,7 @@ func pid1() error {
 		return err
 	}
 	if err := syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc,upperdir=/run/etcb/etc,workdir=/run/etcb/.workdir"); err != nil {
+		log.Printf("ERROR: failed mounting /etc overlay\n\n!! failed mounting /etc overlay: falling back to default !!\n\n")
 		return err
 	}
 

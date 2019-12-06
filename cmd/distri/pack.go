@@ -264,8 +264,8 @@ func (p *packctx) pack(root string) error {
 	for _, dir := range []string{
 		"etc",
 		"root",
-		"boot",    // grub
-		"esp",     // grub (EFI System Partition)
+		"boot", // grub
+		//"esp",     // grub (EFI System Partition)
 		"dev",     // udev
 		"ro",      // read-only package directory (mountpoint)
 		"ro-dbg",  // read-only package directory (mountpoint)
@@ -574,7 +574,7 @@ veth
 
 	fuse.Unmount(filepath.Join(root, "ro"))
 
-	chown := exec.Command("sh", "-c", fmt.Sprintf(`find "%s" -xdev -print0 | sudo xargs -0 chown --no-dereference --from="%s" root:root`, root, os.Getenv("USER")))
+	chown := exec.Command("sh", "-c", fmt.Sprintf(`find "%s" -not -path "/mnt/boot*" -xdev -print0 | sudo xargs -0 chown --no-dereference --from="%s" root:root`, root, os.Getenv("USER")))
 	chown.Stderr = os.Stderr
 	chown.Stdout = os.Stdout
 	if err := chown.Run(); err != nil {
@@ -656,9 +656,7 @@ func (p *packctx) writeDiskImg() error {
 
 	sfdisk := exec.Command("sudo", "sfdisk", loopdev)
 	sfdisk.Stdin = strings.NewReader(`label:gpt
-size=550M,type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-size=1M,type=21686148-6449-6E6F-744E-656564454649
-size=250M, name=boot
+size=550M, name=boot, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 name=root`)
 	sfdisk.Stdout = os.Stdout
 	sfdisk.Stderr = os.Stderr
@@ -677,18 +675,11 @@ name=root`)
 	log.Printf("base: %q", base)
 
 	esp := base + "p1"
+	boot := esp
 	// p2 is the GRUB BIOS boot partition
-	boot := base + "p3"
-	root := base + "p4"
+	root := base + "p2"
 
 	mkfs := exec.Command("sudo", "mkfs.fat", "-F32", esp)
-	mkfs.Stdout = os.Stdout
-	mkfs.Stderr = os.Stderr
-	if err := mkfs.Run(); err != nil {
-		return xerrors.Errorf("%v: %v", mkfs.Args, err)
-	}
-
-	mkfs = exec.Command("sudo", "mkfs.ext2", boot)
 	mkfs.Stdout = os.Stdout
 	mkfs.Stderr = os.Stderr
 	if err := mkfs.Run(); err != nil {
@@ -779,8 +770,8 @@ name=root`)
 		{"/mnt/var", root, "btrfs", 0, "subvol=/var"},
 		{"/mnt/home", root, "btrfs", 0, "subvol=/home"},
 		{"/mnt/roimg", root, "btrfs", 0, "subvol=/roimg"},
-		{"/mnt/boot", boot, "ext2", 0, ""},
-		{"/mnt/boot/efi", esp, "vfat", 0, ""},
+		{"/mnt/boot", boot, "vfat", 0, ""},
+		//{"/mnt/boot/efi", esp, "vfat", 0, ""},
 		{"/mnt/dev", "/dev", "", syscall.MS_BIND, ""},
 		{"/mnt/sys", "/sys", "", syscall.MS_BIND, ""},
 	} {
@@ -826,9 +817,9 @@ name=root`)
 	}
 	defer fuse.Unmount("/mnt/ro")
 
-	if err := os.MkdirAll("/mnt/boot/grub", 0755); err != nil {
-		return err
-	}
+	//if err := os.MkdirAll("/mnt/boot/grub", 0755); err != nil {
+	//	return err
+	//}
 
 	if p.encrypt {
 		crypttab := fmt.Sprintf("cryptroot UUID=%s none luks,discard\n", luksUUID)
@@ -838,28 +829,28 @@ name=root`)
 	}
 
 	//get root and boot uuid
-	rootUUID, err := uuid(root, "part")
+	rootUUID, err := uuid(root, "fs")
 	if err != nil {
-		return xerrors.Errorf(`uuid(root=%v, "part"): %v`, root, err)
+		return xerrors.Errorf(`uuid(root=%v, "fs"): %v`, root, err)
 	}
-	bootUUID, err := uuid(boot, "part")
+	bootUUID, err := uuid(boot, "fs")
 	if err != nil {
-		return xerrors.Errorf(`uuid(boot=%v, "part"): %v`, boot, err)
+		return xerrors.Errorf(`uuid(boot=%v, "fs"): %v`, boot, err)
 	}
 
 	{
 		fstab := ""
 		if p.encrypt {
 			fstab = "/dev/mapper/cryptroot / btrfs defaults,x-systemd.device-timeout=0 1 1\n"
-		} else {
-			fstab = "PARTUUID=" + rootUUID + " / btrfs defaults 0 1\n"
-		}
-		fstab = fstab + "PARTUUID=" + bootUUID + " /boot ext2 defaults 1 2\n"
-		espUUID, err := uuid(esp, "part")
+		} /*else {
+			fstab = "UUID=" + rootUUID + " / btrfs defaults 0 1\n"
+		}*/
+		fstab = fstab + "UUID=" + bootUUID + " /boot vfat defaults 0 1\n"
+		/*espUUID, err := uuid(esp, "part")
 		if err != nil {
 			return xerrors.Errorf(`uuid(esp=%v, "part"): %v`, esp, err)
 		}
-		fstab = fstab + "PARTUUID=" + espUUID + " /boot/efi vfat defaults 0 1\n"
+		fstab = fstab + "UUID=" + espUUID + " /boot/efi vfat defaults 0 1\n"*/
 		if err := ioutil.WriteFile("/mnt/etc/fstab", []byte(fstab), 0644); err != nil {
 			return err
 		}
@@ -887,7 +878,7 @@ name=root`)
 	}
 
 	var params []string
-	params = append(params, "root=PARTUUID="+rootUUID)
+	params = append(params, "root=UUID="+rootUUID)
 	if !p.serialOnly {
 		params = append(params, "console=tty1")
 	}
@@ -898,32 +889,41 @@ name=root`)
 		params = append(params, "systemd.log_level=debug systemd.log_target=console")
 	}
 
-	log.Println("Installing grub...")
-	install := exec.Command("sudo", "chroot", "/mnt", "/ro/grub2-amd64-2.02-3/bin/grub-install", "--target=i386-pc", base)
+	/*
+		log.Println("Installing grub...")
+		install := exec.Command("sudo", "chroot", "/mnt", "/ro/grub2-amd64-2.02-3/bin/grub-install", "--target=i386-pc", base)
+		install.Stderr = os.Stderr
+		install.Stdout = os.Stdout
+		if err := install.Run(); err != nil {
+			return xerrors.Errorf("%v: %v", install.Args, err)
+		}
+
+		install = exec.Command("sudo", "chroot", "/mnt", "/ro/grub2-efi-amd64-2.02-3/bin/grub-install", "--target=x86_64-efi", "--efi-directory=/boot/efi", "--removable", "--no-nvram", "--boot-directory=/boot")
+		install.Stderr = os.Stderr
+		install.Stdout = os.Stdout
+		if err := install.Run(); err != nil {
+			return xerrors.Errorf("%v: %v", install.Args, err)
+		}
+
+		log.Println("Configuring grub...")
+		mkconfigCmd := "GRUB_DISABLE_LINUX_UUID=true GRUB_DISABLE_LINUX_PARTUUID=true GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
+		mkconfig := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", mkconfigCmd)
+		mkconfig.Stderr = os.Stderr
+		mkconfig.Stdout = os.Stdout
+		if err := mkconfig.Run(); err != nil {
+			return xerrors.Errorf("%v: %v", mkconfig.Args, err)
+		}
+
+		if err := ioutil.WriteFile("/mnt/etc/update-grub", []byte("#!/bin/sh\n"+mkconfigCmd+"\n"), 0755); err != nil {
+			return xerrors.Errorf("writing /etc/update-grub: %v", err)
+		}
+	*/
+	log.Println("Installing bootloader")
+	install := exec.Command("sudo", "chroot", "/mnt", "/ro/systemd-amd64-239-10/bin/bootctl" /*"--path=/boot", */, "--no-variables", "install")
 	install.Stderr = os.Stderr
 	install.Stdout = os.Stdout
 	if err := install.Run(); err != nil {
 		return xerrors.Errorf("%v: %v", install.Args, err)
-	}
-
-	install = exec.Command("sudo", "chroot", "/mnt", "/ro/grub2-efi-amd64-2.02-3/bin/grub-install", "--target=x86_64-efi", "--efi-directory=/boot/efi", "--removable", "--no-nvram", "--boot-directory=/boot")
-	install.Stderr = os.Stderr
-	install.Stdout = os.Stdout
-	if err := install.Run(); err != nil {
-		return xerrors.Errorf("%v: %v", install.Args, err)
-	}
-
-	log.Println("Configuring grub...")
-	mkconfigCmd := "GRUB_DISABLE_LINUX_UUID=true GRUB_DISABLE_LINUX_PARTUUID=true GRUB_CMDLINE_LINUX=\"console=ttyS0,115200 " + strings.Join(params, " ") + " init=/init systemd.setenv=PATH=/bin rw\" GRUB_TERMINAL=serial grub-mkconfig -o /boot/grub/grub.cfg"
-	mkconfig := exec.Command("sudo", "chroot", "/mnt", "sh", "-c", mkconfigCmd)
-	mkconfig.Stderr = os.Stderr
-	mkconfig.Stdout = os.Stdout
-	if err := mkconfig.Run(); err != nil {
-		return xerrors.Errorf("%v: %v", mkconfig.Args, err)
-	}
-
-	if err := ioutil.WriteFile("/mnt/etc/update-grub", []byte("#!/bin/sh\n"+mkconfigCmd+"\n"), 0755); err != nil {
-		return xerrors.Errorf("writing /etc/update-grub: %v", err)
 	}
 
 	if err := fuse.Unmount("/mnt/ro"); err != nil {
@@ -961,11 +961,13 @@ name=root`)
 		return err
 	}
 
+	log.Println("Creating default subvolumes")
 	createSubvolume("/mnt/tmp/btrfsroot/snapshots")
 	os.MkdirAll("/mnt/tmp/btrfsroot/snapshots/default", 0700)
 	os.MkdirAll("/mnt/tmp/btrfsroot/snapshots/pristine", 0700)
 
-	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/pristine/etcb", true); err != nil {
+	//TODO allow read-only snapshots (make read-only only upper dir)
+	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/pristine/etcb", false); err != nil {
 		return xerrors.Errorf("create snaphot: %v", err)
 	}
 	if err := createBtrfsSnapshot("/mnt/roimg", "/mnt/tmp/btrfsroot/snapshots/pristine/roimg", true); err != nil {
@@ -978,6 +980,35 @@ name=root`)
 		return xerrors.Errorf("create snaphot: %v", err)
 	}
 
+	log.Println("Creating boot configurations")
+	if err := ioutil.WriteFile("/mnt/boot/loader/loader.conf", []byte(`
+timeout 4
+console-mode keep
+default  default
+console-mode max
+editor   yes
+#auto-firmware 1
+
+`), 0644); err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile("/mnt/boot/loader/entries/default.conf", []byte(`
+title   Default snapshot
+linux   /vmlinuz-5.1.9-9
+initrd  /initramfs-5.1.9-9.img
+options  console=ttyS0,115200 ro rootflags=subvol=sysroot  root=UUID=`+rootUUID+` init=/init snapshot=default systemd.setenv=PATH=/bin rw
+`), 0644); err != nil {
+		return err
+	}
+	if err := ioutil.WriteFile("/mnt/boot/loader/entries/pristine.conf", []byte(`
+title   pristine
+linux   /vmlinuz-5.1.9-9
+initrd  /initramfs-5.1.9-9.img
+options  console=ttyS0,115200 ro rootflags=subvol=sysroot  root=UUID=`+rootUUID+` init=/init snapshot=pristine systemd.setenv=PATH=/bin rw
+`), 0644); err != nil {
+		return err
+	}
+
 	if err := syscall.Unmount("/mnt/tmp/btrfsroot", 0); err != nil {
 		return err
 	}
@@ -986,7 +1017,7 @@ name=root`)
 	os.RemoveAll("/mnt/etcb")
 
 	//unmount /mnt and everything mounted below
-	for _, m := range []string{"sys", "dev", "proc", "boot/efi", "boot", "home", "var", "roimg"} {
+	for _, m := range []string{"sys", "dev", "proc", "boot", "home", "var", "roimg"} {
 		if err := syscall.Unmount(filepath.Join("/mnt", m), 0); err != nil {
 			return xerrors.Errorf("unmount /mnt/%s: %v", m, err)
 		}
