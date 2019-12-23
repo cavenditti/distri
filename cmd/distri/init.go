@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	//"path/filepath"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -32,11 +33,11 @@ func parseCmdline(arg []string) (map[string]string, error) {
 	return m, err
 }
 
-func createEtcOverlay() error {
+/*func createEtcOverlay() error {
 	syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc,upperdir=/run/etc/u,work=/run/etc/w")
 
 	return nil
-}
+}*/
 
 func bootfuse() error {
 	// TODO: start fuse in separate process, make argv[0] be '@' as per
@@ -87,7 +88,7 @@ func pid1() error {
 	log.Printf("mounting /roimg snapshot")
 	if err := syscall.Mount(config.rootDev, "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots/"+config.snapshot+"/roimg"); err != nil {
 		// if failed, try mounting /roimg which subvolume should always exists
-		log.Printf("!! failed mounting subvolume: /snapshots/" + config.snapshot + "/roimg !!\ttrying /roimg instead")
+		log.Printf("failed mounting subvolume: /snapshots/" + config.snapshot + "/roimg\ttrying /roimg instead")
 		if err := syscall.Mount(config.rootDev, "/roimg", "btrfs", syscall.MS_MGC_VAL, "subvol=/roimg"); err != nil {
 			return err
 		}
@@ -106,23 +107,37 @@ func pid1() error {
 	}
 	if err := syscall.Mount(config.rootDev, "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots/"+config.snapshot+"/etcb"); err != nil {
 		// if failed, try mounting /etcb subvolume which should always exists
-		log.Printf("!! failed mounting subvolume: /snapshots/" + config.snapshot + "/etcb !!\ttrying /etcb instead")
+		log.Printf("failed mounting subvolume: /snapshots/" + config.snapshot + "/etcb\ttrying /etcb instead")
 		if err := syscall.Mount(config.rootDev, "/run/etcb", "btrfs", syscall.MS_MGC_VAL, "subvol=/etcb"); err != nil {
 			return err
 		}
 	}
-	if err := os.RemoveAll("/run/etcb/.workdir"); err != nil {
+	os.RemoveAll("/run/etcb/.workdir")
+	os.MkdirAll("/run/etcb/.workdir", 0700)
+	os.MkdirAll("/etc", 0755)
+
+	// Check if it's a read-only snapshot
+	/*readonly := true;
+	os.MkdirAll(snapshotsroot, 0700)
+        if err := syscall.Mount(config.rootDev, snapshotsroot, "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots"); err != nil {
+		log.Printf("Error mounting snapshots root: %v ", err)
 		return err
-	}
-	if err := os.MkdirAll("/run/etcb/.workdir", 0700); err != nil {
-		return err
-	}
-	if err := os.MkdirAll("/etc", 0755); err != nil {
-		return err
-	}
+        }
+	if _, err := os.Stat(filepath.Join(snapshotsroot,config.snapshot,"readonly")); os.IsNotExist(err) {
+		readonly = false
+	}*/
+
 	if err := syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc,upperdir=/run/etcb/etc,workdir=/run/etcb/.workdir"); err != nil {
-		log.Printf("ERROR: failed mounting /etc overlay\n\n!! failed mounting /etc overlay: falling back to default !!\n\n")
-		return err
+
+		os.MkdirAll("/run/etctmp", 0700)
+		syscall.Mount("tmpfs", "/run/etctmp", "tmpfs", syscall.MS_MGC_VAL|syscall.MS_NOSUID|syscall.MS_NODEV, "size=500M")
+		os.MkdirAll("/run/etctmp/workdir", 0700)
+		os.MkdirAll("/run/etctmp/upper", 0700)
+		if err = syscall.Mount("overlay", "/etc", "overlay", syscall.MS_MGC_VAL, "lowerdir=/ro/etc:/run/etcb/etc,upperdir=/run/etctmp/upper,workdir=/run/etctmp/workdir"); err != nil {
+			log.Printf("ERROR: failed mounting /etc overlay")
+			return err
+		}
+		log.Printf("mounted read-only configuration")
 	}
 
 	// start systemd

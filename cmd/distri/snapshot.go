@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	_ "github.com/distr1/distri/internal/oninterrupt"
 	"golang.org/x/xerrors"
@@ -63,7 +64,7 @@ func getSystemconfig() (systemconfig, error) {
 func createBtrfsSnapshot(subvol, path string, readOnly bool) error {
 	var cmd *exec.Cmd
 	if readOnly {
-		// FIXME needs sudo during pack but shouldn't be so
+		// FIXME needs sudo during pack but this shouldn't be done this way
 		cmd = exec.Command("sudo", "btrfs", "subvolume", "snapshot", "-r", subvol, path)
 	} else {
 		cmd = exec.Command("sudo", "btrfs", "subvolume", "snapshot", subvol, path)
@@ -142,6 +143,8 @@ Create a system snapshot.
 			}
 		}
 
+	ioutil.WriteFile(filepath.Join(snapshotsroot, name, "readonly"), []byte(""), 0600)
+
 	} else {
 
 		for _, s := range []string{"etcb", "roimg"} {
@@ -166,6 +169,9 @@ options  console=ttyS0,115200 ro rootflags=subvol=sysroot  root=UUID=`+rootUUID+
 `), 0644); err != nil {
 		return err
 	}
+
+	//Write creation date
+	ioutil.WriteFile(filepath.Join(snapshotsroot, name, "createdAt"), []byte(time.Now().UTC().Format(time.UnixDate)), 0600)
 
 	syscall.Unmount(snapshotsroot, 0)
 	os.RemoveAll(snapshotsroot)
@@ -200,12 +206,15 @@ func listSnapshots(args []string) error {
 	for _, file := range fileInfo {
 		if file.IsDir() {
 			name := file.Name()
-			fmt.Printf(name)
 			if name == config.snapshot {
-				fmt.Printf(" [current]\n")
-			} else {
-				fmt.Printf("\n")
+				fmt.Printf("*")
 			}
+			fmt.Printf("%s", name)
+			creationDate, err := ioutil.ReadFile(filepath.Join(snapshotsroot, file.Name(), "createdAt"))
+			if err == nil {
+				fmt.Printf(" at %s", creationDate)
+			}
+			fmt.Printf("\n")
 		}
 	}
 
@@ -215,6 +224,51 @@ func listSnapshots(args []string) error {
 	return nil
 }
 
+func deleteSnapshot(args []string) error {
+	fset := flag.NewFlagSet("delete", flag.ExitOnError)
+	var (
+	// update = fset.Bool("update", false, "update existing snapshot")
+	)
+	fset.Usage = func() {
+		fmt.Fprintln(os.Stderr, `distri snapshot delete <name>
+Delete a system snapshot.
+			`)
+		fset.PrintDefaults()
+	}
+
+	fset.Parse(args)
+	if fset.NArg() < 1 {
+		return xerrors.Errorf("syntax: snapshot delete <name>")
+	}
+
+	var index int
+	if len(args) > 1 {
+		index = fset.NArg()
+	} else {
+		index = 0
+	}
+	name := args[index]
+	config, err := getSystemconfig()
+	if err != nil {
+		return err
+	}
+
+	os.MkdirAll(snapshotsroot, 0700)
+	if err := syscall.Mount(config.rootDev, snapshotsroot, "btrfs", syscall.MS_MGC_VAL, "subvol=/snapshots"); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(filepath.Join(snapshotsroot, name)); err != nil {
+		return nil
+	}
+
+	syscall.Unmount(snapshotsroot, 0)
+	os.RemoveAll(snapshotsroot)
+
+	return nil
+
+}
+
 func snapshot(arg []string) error {
 	type cmd struct {
 		fn func(args []string) error
@@ -222,6 +276,7 @@ func snapshot(arg []string) error {
 	verbs := map[string]cmd{
 		"list":   {listSnapshots},
 		"create": {createSnapshot},
+		"delete": {deleteSnapshot},
 	}
 
 	args := flag.Args()
@@ -237,6 +292,7 @@ func snapshot(arg []string) error {
 			fmt.Fprintf(os.Stderr, "Snapshots commands:\n")
 			fmt.Fprintf(os.Stderr, "\tlist  - list snapshots\n")
 			fmt.Fprintf(os.Stderr, "\tcreate   - create new snapshot from current configuration\n")
+			fmt.Fprintf(os.Stderr, "\tdelete   - delete a snapshot\n")
 			os.Exit(2)
 		}
 		verb = args[0]

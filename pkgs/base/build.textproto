@@ -1,5 +1,5 @@
 source: "empty://"
-version: "3-9"
+version: "3-10"
 
 # This is the shortest and fastest way to build an empty package:
 dep: "bash"
@@ -18,8 +18,6 @@ runtime_dep: "distri1"
 # booting (e.g. docker)
 runtime_dep: "systemd"   # for booting
 runtime_dep: "dbus"      # for e.g. systemd’s timedatectl
-runtime_dep: "grub2"     # for BIOS boot
-runtime_dep: "grub2-efi" # for UEFI boot
 
 # For creating an initramfs:
 runtime_dep: "dracut"

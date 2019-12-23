@@ -20,6 +20,7 @@ GCEDISKIMG=/tmp/distri-gcs.tar.gz
 DOCSDIR=/tmp/distri-docs
 
 QEMU=qemu-system-x86_64 \
+	--bios /usr/share/ovmf/x64/OVMF_CODE.fd \
 	-device e1000,netdev=net0 \
 	-netdev user,id=net0,hostfwd=tcp::5555-:22 \
 	-device virtio-rng-pci \
@@ -57,7 +58,8 @@ DOCKERTAR=distri pack -docker ${PACKFLAGS}
 
 .PHONY: install
 
-all: install
+all: PACKFLAGS+= -serialonly
+all: clear base image qemu-serial
 
 install:
 # TODO: inherit CAP_SETFCAP
@@ -75,12 +77,12 @@ base: distri1
 	cd pkgs/base-x11 && distri
 
 clear:
-	rm -R build/base*
-	rm -R build/distri1
-	rm -R build/distri/pkg/base*
-	rm -R build/distri/pkg/distri1*
+	-rm -R build/base*
+	-rm -R build/distri1
+	-rm -R build/distri/pkg/base*
+	-rm -R build/distri/pkg/distri1*
 
-image:
+image: install
 	DISTRIROOT=$$PWD ${IMAGE}
 
 cryptimage:

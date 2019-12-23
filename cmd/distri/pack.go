@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	cmdfuse "github.com/distr1/distri/cmd/distri/internal/fuse"
@@ -967,7 +968,7 @@ name=root`)
 	os.MkdirAll("/mnt/tmp/btrfsroot/snapshots/pristine", 0700)
 
 	//TODO allow read-only snapshots (make read-only only upper dir)
-	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/pristine/etcb", false); err != nil {
+	if err := createBtrfsSnapshot("/mnt/etcb", "/mnt/tmp/btrfsroot/snapshots/pristine/etcb", true); err != nil {
 		return xerrors.Errorf("create snaphot: %v", err)
 	}
 	if err := createBtrfsSnapshot("/mnt/roimg", "/mnt/tmp/btrfsroot/snapshots/pristine/roimg", true); err != nil {
@@ -979,6 +980,13 @@ name=root`)
 	if err := createBtrfsSnapshot("/mnt/roimg", "/mnt/tmp/btrfsroot/snapshots/default/roimg", false); err != nil {
 		return xerrors.Errorf("create snaphot: %v", err)
 	}
+
+	//save creation date
+	t := []byte(time.Now().UTC().Format(time.UnixDate))
+	ioutil.WriteFile(filepath.Join("/mnt/tmp/btrfsroot/snapshots/pristine/", "createdAt"), t, 0600)
+	ioutil.WriteFile(filepath.Join("/mnt/tmp/btrfsroot/snapshots/default", "createdAt"), t, 0600)
+
+	ioutil.WriteFile(filepath.Join("/mnt/tmp/btrfsroot/snapshots/pristine/", "readonly"), []byte(""), 0600)
 
 	log.Println("Creating boot configurations")
 	if err := ioutil.WriteFile("/mnt/boot/loader/loader.conf", []byte(`
