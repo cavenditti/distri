@@ -20,7 +20,7 @@ GCEDISKIMG=/tmp/distri-gcs.tar.gz
 DOCSDIR=/tmp/distri-docs
 
 QEMU=qemu-system-x86_64 \
-	--bios /usr/share/ovmf/x64/OVMF_CODE.fd \
+	--bios /usr/share/ovmf/OVMF.fd \
 	-device e1000,netdev=net0 \
 	-netdev user,id=net0,hostfwd=tcp::5555-:22 \
 	-device virtio-rng-pci \
